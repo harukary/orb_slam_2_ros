@@ -27,7 +27,6 @@ void Node::Init () {
   node_handle_.param(name_of_node_+ "/publish_tf", publish_tf_param_, true);
   node_handle_.param<std::string>(name_of_node_+ "/pointcloud_frame_id", map_frame_id_param_, "map");
   node_handle_.param<std::string>(name_of_node_+ "/camera_frame_id", camera_frame_id_param_, "camera_link");
-  node_handle_.param<std::string>(name_of_node_+ "/target_frame_id", target_frame_id_param_, "base_link");
   node_handle_.param<std::string>(name_of_node_ + "/map_file", map_file_name_param_, "map.bin");
   node_handle_.param<std::string>(name_of_node_ + "/voc_file", voc_file_name_param_, "file_not_set");
   node_handle_.param(name_of_node_ + "/load_map", load_map_param_, false);
@@ -45,10 +44,6 @@ void Node::Init () {
   dynamic_param_callback = boost::bind(&Node::ParamsChangedCallback, this, _1, _2);
   dynamic_param_server_.setCallback(dynamic_param_callback);
 
-  // Initialization transformation listener
-  tfBuffer.reset(new tf2_ros::Buffer);
-  tfListener.reset(new tf2_ros::TransformListener(*tfBuffer));
-
   rendered_image_publisher_ = image_transport_.advertise (name_of_node_+"/debug_image", 1);
   if (publish_pointcloud_param_) {
     map_points_publisher_ = node_handle_.advertise<sensor_msgs::PointCloud2> (name_of_node_+"/map_points", 1);
@@ -58,6 +53,9 @@ void Node::Init () {
   if (publish_pose_param_) {
     pose_publisher_ = node_handle_.advertise<geometry_msgs::PoseStamped> (name_of_node_+"/pose", 1);
   }
+
+  //
+  points_pix_3d_publisher_ = node_handle_.advertise<orb_slam_2_ros_msgs::PointPix3ds> (name_of_node_+"/point_pix_3d", 1);
 }
 
 
@@ -65,12 +63,10 @@ void Node::Update () {
   cv::Mat position = orb_slam_->GetCurrentPosition();
 
   if (!position.empty()) {
-    if (publish_tf_param_){
-      PublishPositionAsTransform(position);
-    }
+    PublishPositionAsTransform (position);
 
     if (publish_pose_param_) {
-      PublishPositionAsPoseStamped(position);
+      PublishPositionAsPoseStamped (position);
     }
   }
 
@@ -80,97 +76,50 @@ void Node::Update () {
     PublishMapPoints (orb_slam_->GetAllMapPoints());
   }
 
+  // vector<bool> vbMap = orb_slam_->mpFrameDrawer->mvbMap;
+  vector<std::pair<cv::Point, cv::Point3f>> PointsPix3d = orb_slam_->mpFrameDrawer->PointsPix3d;
+  // vector<cv::Point> currentIP = orb_slam_->mpFrameDrawer->currentIP;
+  // size_t N = orb_slam_->mpFrameDrawer->mvCurrentKeys.size();
+  // vector<cv::KeyPoint> vCurrentKeys = orb_slam_->mpFrameDrawer->mvCurrentKeys;
+  orb_slam_2_ros_msgs::PointPix3ds points;
+  size_t N = PointsPix3d.size();
+  std::cout << "N: " << N << std::endl;
+  for (size_t i = 0; i < N; i++)
+  {
+    // std::cout << "?" << vbMap[i] << std::endl;
+    orb_slam_2_ros_msgs::PointPix3d one;
+    one.pointPix.x = PointsPix3d[i].first.x;
+    one.pointPix.y = PointsPix3d[i].first.y;
+    one.point3d.x = PointsPix3d[i].second.x;
+    one.point3d.y = PointsPix3d[i].second.y;
+    one.point3d.z = PointsPix3d[i].second.z;
+    points.points.push_back(one);
+  }
+  points_pix_3d_publisher_.publish(points);
+  
 }
 
 
 void Node::PublishMapPoints (std::vector<ORB_SLAM2::MapPoint*> map_points) {
   sensor_msgs::PointCloud2 cloud = MapPointsToPointCloud (map_points);
   map_points_publisher_.publish (cloud);
+  //PointPix3d publisher
 }
 
-tf2::Transform Node::TransformToTarget (tf2::Transform tf_in, std::string frame_in, std::string frame_target) {
-  // Transform tf_in from frame_in to frame_target
-  tf2::Transform tf_map2orig = tf_in;
-  tf2::Transform tf_orig2target;
-  tf2::Transform tf_map2target;
-
-  tf2::Stamped<tf2::Transform> transformStamped_temp;
-  try {
-    // Get the transform from camera to target
-    geometry_msgs::TransformStamped tf_msg = tfBuffer->lookupTransform(frame_in, frame_target, ros::Time(0));
-    // Convert to tf2
-    tf2::fromMsg(tf_msg, transformStamped_temp);
-    tf_orig2target.setBasis(transformStamped_temp.getBasis());
-    tf_orig2target.setOrigin(transformStamped_temp.getOrigin());
-
-  } catch (tf2::TransformException &ex) {
-    ROS_WARN("%s",ex.what());
-    //ros::Duration(1.0).sleep();
-    tf_orig2target.setIdentity();
-  }
-
-  /* 
-    // Print debug info
-    double roll, pitch, yaw;
-    // Print debug map2orig
-    tf2::Matrix3x3(tf_map2orig.getRotation()).getRPY(roll, pitch, yaw);
-    ROS_INFO("Static transform Map to Orig [%s -> %s]",
-                    map_frame_id_param_.c_str(), frame_in.c_str());
-    ROS_INFO(" * Translation: {%.3f,%.3f,%.3f}",
-                    tf_map2orig.getOrigin().x(), tf_map2orig.getOrigin().y(), tf_map2orig.getOrigin().z());
-    ROS_INFO(" * Rotation: {%.3f,%.3f,%.3f}",
-                    RAD2DEG(roll), RAD2DEG(pitch), RAD2DEG(yaw));
-    // Print debug tf_orig2target
-    tf2::Matrix3x3(tf_orig2target.getRotation()).getRPY(roll, pitch, yaw);
-    ROS_INFO("Static transform Orig to Target [%s -> %s]",
-                    frame_in.c_str(), frame_target.c_str());
-    ROS_INFO(" * Translation: {%.3f,%.3f,%.3f}",
-                    tf_orig2target.getOrigin().x(), tf_orig2target.getOrigin().y(), tf_orig2target.getOrigin().z());
-    ROS_INFO(" * Rotation: {%.3f,%.3f,%.3f}",
-                    RAD2DEG(roll), RAD2DEG(pitch), RAD2DEG(yaw));
-    // Print debug map2target
-    tf2::Matrix3x3(tf_map2target.getRotation()).getRPY(roll, pitch, yaw);
-    ROS_INFO("Static transform Map to Target [%s -> %s]",
-                    map_frame_id_param_.c_str(), frame_target.c_str());
-    ROS_INFO(" * Translation: {%.3f,%.3f,%.3f}",
-                    tf_map2target.getOrigin().x(), tf_map2target.getOrigin().y(), tf_map2target.getOrigin().z());
-    ROS_INFO(" * Rotation: {%.3f,%.3f,%.3f}",
-                    RAD2DEG(roll), RAD2DEG(pitch), RAD2DEG(yaw));
-  */
-
-  // Transform from map to target
-  tf_map2target = tf_map2orig * tf_orig2target;
-  return tf_map2target;
-}
 
 void Node::PublishPositionAsTransform (cv::Mat position) {
-  // Get transform from map to camera frame
-  tf2::Transform tf_transform = TransformFromMat(position);
-
-  // Make transform from camera frame to target frame
-  tf2::Transform tf_map2target = TransformToTarget(tf_transform, camera_frame_id_param_, target_frame_id_param_);
-
-  // Make message
-  tf2::Stamped<tf2::Transform> tf_map2target_stamped;
-  tf_map2target_stamped = tf2::Stamped<tf2::Transform>(tf_map2target, current_frame_time_, map_frame_id_param_);
-  geometry_msgs::TransformStamped msg = tf2::toMsg(tf_map2target_stamped);
-  msg.child_frame_id = target_frame_id_param_;
-  // Broadcast tf
-  static tf2_ros::TransformBroadcaster tf_broadcaster;
-  tf_broadcaster.sendTransform(msg);
+  if(publish_tf_param_){
+      tf::Transform transform = TransformFromMat (position);
+      static tf::TransformBroadcaster tf_broadcaster;
+      tf_broadcaster.sendTransform(tf::StampedTransform(transform, current_frame_time_, map_frame_id_param_, camera_frame_id_param_));
+  }
 }
 
 void Node::PublishPositionAsPoseStamped (cv::Mat position) {
-  tf2::Transform tf_position = TransformFromMat(position);
-
-  // Make transform from camera frame to target frame
-  tf2::Transform tf_position_target = TransformToTarget(tf_position, camera_frame_id_param_, target_frame_id_param_);
-  
-  // Make message
-  tf2::Stamped<tf2::Transform> tf_position_target_stamped;
-  tf_position_target_stamped = tf2::Stamped<tf2::Transform>(tf_position_target, current_frame_time_, map_frame_id_param_);
+  tf::Transform grasp_tf = TransformFromMat (position);
+  tf::Stamped<tf::Pose> grasp_tf_pose(grasp_tf, current_frame_time_, map_frame_id_param_);
   geometry_msgs::PoseStamped pose_msg;
-  tf2::toMsg(tf_position_target_stamped, pose_msg);
+  tf::poseStampedTFToMsg (grasp_tf_pose, pose_msg);
   pose_publisher_.publish(pose_msg);
 }
 
@@ -184,7 +133,7 @@ void Node::PublishRenderedImage (cv::Mat image) {
 }
 
 
-tf2::Transform Node::TransformFromMat (cv::Mat position_mat) {
+tf::Transform Node::TransformFromMat (cv::Mat position_mat) {
   cv::Mat rotation(3,3,CV_32F);
   cv::Mat translation(3,1,CV_32F);
 
@@ -192,15 +141,15 @@ tf2::Transform Node::TransformFromMat (cv::Mat position_mat) {
   translation = position_mat.rowRange(0,3).col(3);
 
 
-  tf2::Matrix3x3 tf_camera_rotation (rotation.at<float> (0,0), rotation.at<float> (0,1), rotation.at<float> (0,2),
+  tf::Matrix3x3 tf_camera_rotation (rotation.at<float> (0,0), rotation.at<float> (0,1), rotation.at<float> (0,2),
                                     rotation.at<float> (1,0), rotation.at<float> (1,1), rotation.at<float> (1,2),
                                     rotation.at<float> (2,0), rotation.at<float> (2,1), rotation.at<float> (2,2)
                                    );
 
-  tf2::Vector3 tf_camera_translation (translation.at<float> (0), translation.at<float> (1), translation.at<float> (2));
+  tf::Vector3 tf_camera_translation (translation.at<float> (0), translation.at<float> (1), translation.at<float> (2));
 
   //Coordinate transformation matrix from orb coordinate system to ros coordinate system
-  const tf2::Matrix3x3 tf_orb_to_ros (0, 0, 1,
+  const tf::Matrix3x3 tf_orb_to_ros (0, 0, 1,
                                     -1, 0, 0,
                                      0,-1, 0);
 
@@ -216,7 +165,7 @@ tf2::Transform Node::TransformFromMat (cv::Mat position_mat) {
   tf_camera_rotation = tf_orb_to_ros*tf_camera_rotation;
   tf_camera_translation = tf_orb_to_ros*tf_camera_translation;
 
-  return tf2::Transform (tf_camera_rotation, tf_camera_translation);
+  return tf::Transform (tf_camera_rotation, tf_camera_translation);
 }
 
 

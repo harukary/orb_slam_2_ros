@@ -54,8 +54,13 @@ protected:
     // Info of the frame to be drawn
     cv::Mat mIm;
     int N;
+public:
     vector<cv::KeyPoint> mvCurrentKeys;
     vector<bool> mvbMap, mvbVO;
+    vector<cv::Point3f> currentMP; //for PointPix3d pub
+    vector<cv::Point> currentIP; //for PointPix3d pub
+    vector<std::pair<cv::Point, cv::Point3f>> PointsPix3d; //for PointPix3d pub
+protected:
     bool mbOnlyTracking;
     int mnTracked, mnTrackedVO;
     vector<cv::KeyPoint> mvIniKeys;

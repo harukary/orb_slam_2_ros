@@ -92,6 +92,7 @@ cv::Mat FrameDrawer::DrawFrame()
         mnTrackedVO=0;
         const float r = 5;
         const int n = vCurrentKeys.size();
+        PointsPix3d.clear();
         for(int i=0;i<n;i++)
         {
             if(vbVO[i] || vbMap[i])
@@ -107,6 +108,7 @@ cv::Mat FrameDrawer::DrawFrame()
                 {
                     cv::rectangle(im,pt1,pt2,cv::Scalar(0,255,0));
                     cv::circle(im,vCurrentKeys[i].pt,2,cv::Scalar(0,255,0),-1);
+                    PointsPix3d.push_back(std::make_pair(vCurrentKeys[i].pt, currentMP[i]));
                     mnTracked++;
                 }
                 else // This is match to a "visual odometry" MapPoint created in the last frame
@@ -172,6 +174,8 @@ void FrameDrawer::Update(Tracking *pTracker)
     N = mvCurrentKeys.size();
     mvbVO = vector<bool>(N,false);
     mvbMap = vector<bool>(N,false);
+    currentMP = vector<cv::Point3f>(N,cv::Point3f());
+    currentIP = vector<cv::Point>(N,cv::Point());
     mbOnlyTracking = pTracker->mbOnlyTracking;
 
 
@@ -182,15 +186,25 @@ void FrameDrawer::Update(Tracking *pTracker)
     }
     else if(pTracker->mLastProcessedState==Tracking::OK)
     {
+        // currentMP.clear();
+        // currentIP.clear();
         for(int i=0;i<N;i++)
         {
             MapPoint* pMP = pTracker->mCurrentFrame.mvpMapPoints[i];
+            //for PointPix3d pub
             if(pMP)
             {
                 if(!pTracker->mCurrentFrame.mvbOutlier[i])
                 {
                     if(pMP->Observations()>0)
+                    {
+                        float x = pMP->GetWorldPos().at<float>(2);
+                        float y = -1.0* pMP->GetWorldPos().at<float>(0);
+                        float z = -1.0* pMP->GetWorldPos().at<float>(1);
                         mvbMap[i]=true;
+                        currentMP[i] = cv::Point3f(x,y,z);
+                        // currentIP[i] = mvCurrentKeys[i].pt;
+                    }
                     else
                         mvbVO[i]=true;
                 }
